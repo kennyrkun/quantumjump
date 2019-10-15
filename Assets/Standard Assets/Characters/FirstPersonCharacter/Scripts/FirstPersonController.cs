@@ -1,4 +1,5 @@
 using System;
+
 using UnityEngine;
 using UnityStandardAssets.CrossPlatformInput;
 using UnityStandardAssets.Utility;
@@ -6,12 +7,13 @@ using Random = UnityEngine.Random;
 
 namespace UnityStandardAssets.Characters.FirstPerson
 {
-    [RequireComponent(typeof (CharacterController))]
-    [RequireComponent(typeof (AudioSource))]
+    [RequireComponent(typeof(CharacterController))]
+    [RequireComponent(typeof(AudioSource))]
 
     public class FirstPersonController : MonoBehaviour
     {
         [SerializeField] private bool m_IsWalking;
+        [SerializeField] private bool m_IsCrouching;
         [SerializeField] private float m_WalkSpeed;
         [SerializeField] private float m_RunSpeed;
         [SerializeField] [Range(0f, 1f)] private float m_RunstepLenghten;
@@ -30,33 +32,82 @@ namespace UnityStandardAssets.Characters.FirstPerson
         [SerializeField] private AudioClip m_LandSound;           // the sound played when character touches back on ground.
 
         private Camera m_Camera;
+        private CharacterController m_CharacterController;
+        private AudioSource m_AudioSource;
         private bool m_Jump;
         private float m_YRotation;
         private Vector2 m_Input;
         private Vector3 m_MoveDir = Vector3.zero;
-        private CharacterController m_CharacterController;
         private CollisionFlags m_CollisionFlags;
         private bool m_PreviouslyGrounded;
         private Vector3 m_OriginalCameraPosition;
         private float m_StepCycle;
         private float m_NextStep;
         private bool m_Jumping;
-        private AudioSource m_AudioSource;
+
+        private Rigidbody m_Rigidbody;
+        private Animator m_Animator;
+        private bool m_IsGrounded;
+        private float m_OrigGroundCheckDistance;
+        private const float k_Half = 0.5f;
+        private float m_TurnAmount;
+        private float m_ForwardAmount;
+        private Vector3 m_GroundNormal;
+        private float m_CapsuleHeight;
+        private Vector3 m_CapsuleCenter;
+        private CapsuleCollider m_Capsule;
+        private bool m_Crouching;
+
+        [SerializeField] float m_AnimSpeedMultiplier = 1f;
 
         // Use this for initialization
         private void Start()
         {
-            m_CharacterController = GetComponent<CharacterController>();
             m_Camera = Camera.main;
+            m_CharacterController = GetComponent<CharacterController>();
+            m_AudioSource = GetComponent<AudioSource>();
+
             m_OriginalCameraPosition = m_Camera.transform.localPosition;
             m_FovKick.Setup(m_Camera);
             m_HeadBob.Setup(m_Camera, m_StepInterval);
             m_StepCycle = 0f;
             m_NextStep = m_StepCycle / 2f;
             m_Jumping = false;
-            m_AudioSource = GetComponent<AudioSource>();
 			m_MouseLook.Init(transform, m_Camera.transform);
         }
+
+        /*
+        public void Move(Vector3 move, bool crouch, bool jump)
+        {
+            // convert the world relative moveInput vector into a local-relative
+            // turn amount and forward amount required to head in the desired
+            // direction.
+            if (move.magnitude > 1f) move.Normalize();
+            move = transform.InverseTransformDirection(move);
+            CheckGroundStatus();
+            move = Vector3.ProjectOnPlane(move, m_GroundNormal);
+            m_TurnAmount = Mathf.Atan2(move.x, move.z);
+            m_ForwardAmount = move.z;
+
+            ApplyExtraTurnRotation();
+
+            // control and velocity handling is different when grounded and airborne:
+            if (m_IsGrounded)
+            {
+                HandleGroundedMovement(crouch, jump);
+            }
+            else
+            {
+                HandleAirborneMovement();
+            }
+
+            ScaleCapsuleForCrouching(crouch);
+            PreventStandingInLowHeadroom();
+
+            // send input and other state parameters to the animator
+            UpdateAnimator(move);
+        }
+        */
 
 
         // Update is called once per frame
@@ -79,14 +130,6 @@ namespace UnityStandardAssets.Characters.FirstPerson
                 m_MoveDir.y = 0f;
 
             m_PreviouslyGrounded = m_CharacterController.isGrounded;
-        }
-
-
-        private void PlayLandingSound()
-        {
-            m_AudioSource.clip = m_LandSound;
-            m_AudioSource.Play();
-            m_NextStep = m_StepCycle + .5f;
         }
 
 
@@ -127,6 +170,52 @@ namespace UnityStandardAssets.Characters.FirstPerson
             UpdateCameraPosition(speed);
 
             m_MouseLook.UpdateCursorLock();
+        }
+
+        void ScaleCapsuleForCrouching(bool crouch)
+        {
+            if (m_IsGrounded && crouch)
+            {
+                if (m_Crouching) return;
+                m_Capsule.height = m_Capsule.height / 2f;
+                m_Capsule.center = m_Capsule.center / 2f;
+                m_Crouching = true;
+            }
+            else
+            {
+                Ray crouchRay = new Ray(m_Rigidbody.position + Vector3.up * m_Capsule.radius * k_Half, Vector3.up);
+                float crouchRayLength = m_CapsuleHeight - m_Capsule.radius * k_Half;
+                if (Physics.SphereCast(crouchRay, m_Capsule.radius * k_Half, crouchRayLength, Physics.AllLayers, QueryTriggerInteraction.Ignore))
+                {
+                    m_Crouching = true;
+                    return;
+                }
+                m_Capsule.height = m_CapsuleHeight;
+                m_Capsule.center = m_CapsuleCenter;
+                m_Crouching = false;
+            }
+        }
+
+        // prevent standing up in crouch-only zones
+        void PreventStandingInLowHeadroom()
+        {
+            if (!m_Crouching)
+            {
+                Ray crouchRay = new Ray(m_Rigidbody.position + Vector3.up * m_Capsule.radius * k_Half, Vector3.up);
+                float crouchRayLength = m_CapsuleHeight - m_Capsule.radius * k_Half;
+                if (Physics.SphereCast(crouchRay, m_Capsule.radius * k_Half, crouchRayLength, Physics.AllLayers, QueryTriggerInteraction.Ignore))
+                {
+                    m_Crouching = true;
+                }
+            }
+        }
+
+
+        private void PlayLandingSound()
+        {
+            m_AudioSource.clip = m_LandSound;
+            m_AudioSource.Play();
+            m_NextStep = m_StepCycle + .5f;
         }
 
 
